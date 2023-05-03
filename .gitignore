@@ -56,6 +56,7 @@ Release/
 # Visual Studio
 .vs/
 .vscode/
+*.sln
 
 # MSVC
 *.vcxproj
