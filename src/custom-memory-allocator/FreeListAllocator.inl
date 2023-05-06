@@ -4,26 +4,29 @@
 #include <stdlib.h>
 
 
-FreeListAllocator::FreeListAllocator(size_t inMemoryPoolSize)
+template<typename T>
+FreeListAllocator<T>::FreeListAllocator(size_t inMemoryPoolSize)
     : memoryPoolSize{inMemoryPoolSize},
-      memoryPool{malloc(memoryPoolSize)}
+    memoryPool{static_cast<T *>(malloc(memoryPoolSize * sizeof(T)))}
 {
-    MemoryBlock *const firstBlock = static_cast<MemoryBlock *>(memoryPool);
+    MemoryBlock *const firstBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
     firstBlock->next = nullptr;
     firstBlock->size = memoryPoolSize - sizeof(MemoryBlock);
     firstBlock->isFree = true;
 }
 
-FreeListAllocator::~FreeListAllocator()
+template<typename T>
+FreeListAllocator<T>::~FreeListAllocator()
 {
     free(memoryPool);
 }
 
-void *FreeListAllocator::allocate(size_t size)
+template<typename T>
+T *FreeListAllocator<T>::allocate(size_t size)
 {
     if (size > 0)
     {
-        MemoryBlock *currentBlock = static_cast<MemoryBlock *>(memoryPool);
+        MemoryBlock *currentBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
 
         while (true)
         {
@@ -33,7 +36,7 @@ void *FreeListAllocator::allocate(size_t size)
 
                 currentBlock->isFree = false;
 
-                return currentBlock + 1;
+                return reinterpret_cast<T *>(currentBlock + 1);
             }
 
             MemoryBlock *const nextBlock = currentBlock->next;
@@ -47,36 +50,40 @@ void *FreeListAllocator::allocate(size_t size)
     return nullptr;
 }
 
-void FreeListAllocator::deallocate(void *ptr)
+template<typename T>
+void FreeListAllocator<T>::deallocate(T *ptr)
 {
     if (!isValid(ptr)) return;
 
-    MemoryBlock *const block = static_cast<MemoryBlock *>(ptr) - 1;
+    MemoryBlock *const block = reinterpret_cast<MemoryBlock *>(ptr) - 1;
 
     block->isFree = true;
 
-    mergeMemoryBlocks(static_cast<MemoryBlock *>(memoryPool));
+    mergeMemoryBlocks(reinterpret_cast<MemoryBlock *>(memoryPool));
 }
 
-bool FreeListAllocator::isValid(const void *ptr) const
+template<typename T>
+bool FreeListAllocator<T>::isValid(const T *ptr) const
 {
     if (!ptr) return false;
 
-    const MemoryBlock *const block = static_cast<const MemoryBlock *>(ptr) - 1;
+    const MemoryBlock *const block = reinterpret_cast<const MemoryBlock *>(ptr) - 1;
 
     return isValidBlock(block) && !block->isFree;
 }
 
-bool FreeListAllocator::isValidFast(const void *ptr) const
+template<typename T>
+bool FreeListAllocator<T>::isValidFast(const T *ptr) const
 {
     if (!ptr) return false;
 
-    const MemoryBlock *const block = static_cast<const MemoryBlock *>(ptr) - 1;
+    const MemoryBlock *const block = reinterpret_cast<const MemoryBlock *>(ptr) - 1;
 
     return isValidBlockFast(block) && !block->isFree;
 }
 
-void FreeListAllocator::splitMemoryBlock(MemoryBlock *leftBlock, size_t leftBlockSize)
+template<typename T>
+void FreeListAllocator<T>::splitMemoryBlock(MemoryBlock *leftBlock, size_t leftBlockSize)
 {
     assert(isValidBlock(leftBlock));
     assert(leftBlockSize > 0);
@@ -92,7 +99,8 @@ void FreeListAllocator::splitMemoryBlock(MemoryBlock *leftBlock, size_t leftBloc
     leftBlock->size = leftBlockSize;
 }
 
-void FreeListAllocator::mergeMemoryBlocks(MemoryBlock *leftBlock)
+template<typename T>
+void FreeListAllocator<T>::mergeMemoryBlocks(MemoryBlock *leftBlock)
 {
     assert(isValidBlock(leftBlock));
 
@@ -112,11 +120,12 @@ void FreeListAllocator::mergeMemoryBlocks(MemoryBlock *leftBlock)
     mergeMemoryBlocks(leftBlock);
 }
 
-bool FreeListAllocator::isValidBlock(const MemoryBlock *block) const
+template<typename T>
+bool FreeListAllocator<T>::isValidBlock(const MemoryBlock *block) const
 {
     if (!block) return false;
 
-    const MemoryBlock *currentBlock = static_cast<MemoryBlock *>(memoryPool);
+    const MemoryBlock *currentBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
 
     while (true)
     {
@@ -132,7 +141,8 @@ bool FreeListAllocator::isValidBlock(const MemoryBlock *block) const
     return false;
 }
 
-bool FreeListAllocator::isValidBlockFast(const MemoryBlock *block) const
+template<typename T>
+bool FreeListAllocator<T>::isValidBlockFast(const MemoryBlock *block) const
 {
     return reinterpret_cast<unsigned long int>(block) >= reinterpret_cast<unsigned long int>(memoryPool) &&
            reinterpret_cast<unsigned long int>(block) < reinterpret_cast<unsigned long int>(memoryPool) + reinterpret_cast<unsigned long int>(memoryPoolSize);

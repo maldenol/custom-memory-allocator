@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 
+template<typename T>
 class FreeListAllocator
 {
 private:
@@ -13,11 +14,11 @@ public:
     FreeListAllocator(size_t inMemoryPoolSize);
     ~FreeListAllocator();
 
-    void *allocate(size_t size);
-    void deallocate(void *ptr);
+    T *allocate(size_t size);
+    void deallocate(T *ptr);
 
-    bool isValid(const void *ptr) const;
-    bool isValidFast(const void *ptr) const;
+    bool isValid(const T *ptr) const;
+    bool isValidFast(const T *ptr) const;
 
 private:
     void splitMemoryBlock(MemoryBlock *leftBlock, size_t leftBlockSize);
@@ -28,7 +29,7 @@ private:
 
 private:
     size_t memoryPoolSize = 0;
-    void *memoryPool = nullptr;
+    T *memoryPool = nullptr;
 
 private:
     struct MemoryBlock
@@ -38,5 +39,7 @@ private:
         bool isFree = true;
     };
 };
+
+#include "FreeListAllocator.inl"
 
 #endif
