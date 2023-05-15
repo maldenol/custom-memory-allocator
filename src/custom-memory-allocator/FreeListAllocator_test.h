@@ -1,4 +1,4 @@
-#include <vector>
+#include <thread>
 
 #include <gtest/gtest.h>
 
@@ -198,11 +198,12 @@ TEST(FreeListAllocator, testAllocateDeallocate01)
     char *ptr2 = allocator.allocate(100);
     char *ptr3 = allocator.allocate(100);
     allocator.deallocate(ptr2);
+    bool isValidPtr2 = allocator.isValid(ptr2);
     char *ptr4 = allocator.allocate(100);
 
     EXPECT_TRUE(
         allocator.isValid(ptr1) &&
-        !allocator.isValid(ptr2) &&
+        !isValidPtr2 &&
         !allocator.isValid(ptr3) &&
         allocator.isValid(ptr4)
     );
@@ -297,4 +298,169 @@ TEST(FreeListAllocator, testStateless01)
         !allocator1.isValid(ptr1) &&
         allocator2.isValid(ptr2)
     );
+}
+
+TEST(FreeListAllocator, testThreadSafe01)
+{
+    constexpr FreeListMode FreeListMode{
+        FLA_ALIGN_BY_MEMORY_BLOCKS,
+        FLA_ALLOCATION_STRATEGY_FIRST_FIT,
+        FLA_SINGLE_MEMORY_BLOCKS
+    };
+
+    constexpr FreeListAllocatorMode AllocatorMode
+    {
+        691,
+        1
+    };
+
+    FreeListAllocator<char, FreeListMode, AllocatorMode> allocator{};
+
+    char *ptr1 = nullptr;
+
+    auto func = [&allocator, &ptr1](){
+        ptr1 = allocator.allocate(500);
+    };
+
+    std::thread thread1{func};
+
+    thread1.join();
+
+    EXPECT_TRUE(!allocator.isValid(ptr1));
+}
+
+TEST(FreeListAllocator, testThreadSafe02)
+{
+    constexpr FreeListMode FreeListMode{
+        FLA_ALIGN_BY_MEMORY_BLOCKS,
+        FLA_ALLOCATION_STRATEGY_FIRST_FIT,
+        FLA_SINGLE_MEMORY_BLOCKS
+    };
+
+    constexpr FreeListAllocatorMode AllocatorMode
+    {
+        692,
+        1
+    };
+
+    FreeListAllocator<char, FreeListMode, AllocatorMode> allocator{};
+
+    char *ptr1 = nullptr;
+    char *ptr2 = nullptr;
+
+    auto func = [&allocator](char *&ptr){
+        ptr = allocator.allocate(500);
+    };
+
+    std::thread thread1{func, std::ref(ptr1)};
+    std::thread thread2{func, std::ref(ptr2)};
+
+    thread1.join();
+    thread2.join();
+
+    EXPECT_TRUE(!allocator.isValid(ptr1) && !allocator.isValid(ptr2));
+}
+
+TEST(FreeListAllocator, testThreadSafe03)
+{
+    constexpr FreeListMode FreeListMode{
+        FLA_ALIGN_BY_MEMORY_BLOCKS,
+        FLA_ALLOCATION_STRATEGY_FIRST_FIT,
+        FLA_SINGLE_MEMORY_BLOCKS
+    };
+
+    constexpr FreeListAllocatorMode AllocatorMode
+    {
+        693,
+        1
+    };
+
+    FreeListAllocator<char, FreeListMode, AllocatorMode> allocator{};
+
+    bool success1 = false;
+    bool success2 = false;
+
+    auto func = [&success1, &success2, &allocator](){
+        for (size_t i = 0; i < 10000; ++i)
+        {
+            char *ptr1 = allocator.allocate(500);
+            if (ptr1)
+            {
+                allocator.deallocate(ptr1);
+            }
+            else
+            {
+                return;
+            }
+        }
+
+        static bool threadFlipFlop = true;
+
+        if (threadFlipFlop)
+        {
+            success1 = true;
+        }
+        else
+        {
+            success2 = true;
+        }
+
+        threadFlipFlop = !threadFlipFlop;
+    };
+
+    std::thread thread1{func};
+    std::thread thread2{func};
+
+    thread1.join();
+    thread2.join();
+
+    EXPECT_TRUE(success1 && success2);
+}
+
+TEST(FreeListAllocator, testThreadSafe04)
+{
+    constexpr FreeListMode FreeListMode{
+        FLA_ALIGN_BY_MEMORY_BLOCKS,
+        FLA_ALLOCATION_STRATEGY_FIRST_FIT,
+        FLA_SINGLE_MEMORY_BLOCKS
+    };
+
+    constexpr FreeListAllocatorMode AllocatorMode
+    {
+        694,
+        1
+    };
+
+    bool success1 = false;
+    bool success2 = false;
+
+    auto func = [&success1, &success2, FreeListMode, AllocatorMode](){
+        FreeListAllocator<char, FreeListMode, AllocatorMode> allocator{};
+
+        char *ptr1 = allocator.allocate(500);
+        char *ptr2 = allocator.allocate(500);
+
+        bool success = allocator.isValid(ptr1) && !allocator.isValid(ptr2);
+
+        static bool threadFlipFlop = true;
+
+        if (threadFlipFlop)
+        {
+            success1 = success;
+        }
+        else
+        {
+            success2 = success;
+        }
+
+        threadFlipFlop = !threadFlipFlop;
+    };
+
+    std::thread thread1{func};
+    std::thread thread2{func};
+
+    thread1.join();
+    thread2.join();
+
+    EXPECT_TRUE(success1 && success2);
 }

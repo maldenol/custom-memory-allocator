@@ -25,7 +25,7 @@ public:
     static bool isValidFast(const T *ptr);
 
 private:
-    inline static std::vector<FreeList<T, FreeListMode>> freeLists = {};
+    inline thread_local static std::vector<FreeList<T, FreeListMode>> freeLists = {};
 };
 
 
