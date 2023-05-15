@@ -1,288 +1,76 @@
 #include "FreeListAllocator.h"
 
-#include <assert.h>
-#include <stdlib.h>
 
-
-template<typename T, FreeListAllocatorMode Mode>
-FreeListAllocator<T, Mode>::FreeListAllocator(size_t inMemoryPoolSize)
-    : memoryPool{static_cast<T *>(malloc(inMemoryPoolSize * sizeof(T)))},
-      memoryPoolSize{inMemoryPoolSize}
+template<typename T, FreeListMode FreeListMode, FreeListAllocatorMode AllocatorMode>
+T *FreeListAllocator<T, FreeListMode, AllocatorMode>::allocate(size_t size)
 {
-    MemoryBlock *const firstBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
-    firstBlock->size = memoryPoolSize - sizeof(MemoryBlock);
-    firstBlock->isFree = true;
-    firstBlock->next = nullptr;
-    if constexpr (Mode.doubleMemoryBlocks == FLA_DOUBLE_MEMORY_BLOCKS)
+    if (size > AllocatorMode.freeListSize)
     {
-        firstBlock->previous = nullptr;
+        return nullptr;
     }
 
-    currentNextFitBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-FreeListAllocator<T, Mode>::~FreeListAllocator()
-{
-    free(memoryPool);
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-T *FreeListAllocator<T, Mode>::allocate(size_t size)
-{
-    if (size > 0)
+    for (FreeList<T, FreeListMode> &freeList: freeLists)
     {
-        if constexpr (Mode.allocationStrategy == FLA_ALLOCATION_STRATEGY_FIRST_FIT)
+        T *ptr = freeList.allocate(size);
+
+        if (ptr) return ptr;
+    }
+
+    if (freeLists.size() < AllocatorMode.maxFreeListCount)
+    {
+        FreeList<T, FreeListMode> freeList{AllocatorMode.freeListSize};
+
+        T *ptr = freeList.allocate(size);
+
+        if (ptr)
         {
-            return allocateFirstFit(size);
-        }
-        else if constexpr (Mode.allocationStrategy == FLA_ALLOCATION_STRATEGY_NEXT_FIT)
-        {
-            return allocateNextFit(size);
-        }
-        else if constexpr (Mode.allocationStrategy ==  FLA_ALLOCATION_STRATEGY_BEST_FIT)
-        {
-            return allocateBestFit(size);
+            freeLists.push_back(std::move(freeList));
+
+            return ptr;
         }
     }
 
     return nullptr;
 }
 
-template<typename T, FreeListAllocatorMode Mode>
-void FreeListAllocator<T, Mode>::deallocate(T *ptr)
+template<typename T, FreeListMode FreeListMode, FreeListAllocatorMode AllocatorMode>
+void FreeListAllocator<T, FreeListMode, AllocatorMode>::deallocate(T *ptr)
 {
-    if (!isValid(ptr)) return;
-
-    MemoryBlock *const block = reinterpret_cast<MemoryBlock *>(ptr) - 1;
-
-    block->isFree = true;
-
-    if constexpr (Mode.doubleMemoryBlocks == FLA_DOUBLE_MEMORY_BLOCKS)
+    for (typename std::vector<FreeList<T, FreeListMode>>::iterator it = freeLists.begin(); it != freeLists.end();)
     {
-        mergeDoubleMemoryBlocks(static_cast<MemoryBlock *>(block));
-    }
-    else
-    {
-        mergeSingleMemoryBlocks(reinterpret_cast<MemoryBlock *>(memoryPool));
-    }
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-bool FreeListAllocator<T, Mode>::isValid(const T *ptr) const
-{
-    if (!ptr) return false;
-
-    const MemoryBlock *const block = reinterpret_cast<const MemoryBlock *>(ptr) - 1;
-
-    return isValidBlock(block) && !block->isFree;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-bool FreeListAllocator<T, Mode>::isValidFast(const T *ptr) const
-{
-    if (!ptr) return false;
-
-    const MemoryBlock *const block = reinterpret_cast<const MemoryBlock *>(ptr) - 1;
-
-    return isValidBlockFast(block) && !block->isFree;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-T *FreeListAllocator<T, Mode>::allocateFirstFit(size_t size)
-{
-    MemoryBlock *currentBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
-
-    while (true)
-    {
-        if (currentBlock->isFree && currentBlock->size >= size)
+        if (it->isValidFast(ptr))
         {
-            splitMemoryBlock(currentBlock, size);
+            it->deallocate(ptr);
 
-            currentBlock->isFree = false;
-
-            return reinterpret_cast<T *>(currentBlock + 1);
-        }
-
-        MemoryBlock *const nextBlock = currentBlock->next;
-
-        if (!nextBlock) return nullptr;
-
-        currentBlock = nextBlock;
-    }
-
-    return nullptr;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-T *FreeListAllocator<T, Mode>::allocateNextFit(size_t size)
-{
-    MemoryBlock *firstBlock = currentNextFitBlock;
-
-    do
-    {
-        MemoryBlock *const nextBlock = currentNextFitBlock->next;
-
-        if (currentNextFitBlock->isFree && currentNextFitBlock->size >= size)
-        {
-            firstBlock = nextBlock ? nextBlock : reinterpret_cast<MemoryBlock *>(memoryPool);
-
-            splitMemoryBlock(currentNextFitBlock, size);
-
-            currentNextFitBlock->isFree = false;
-
-            return reinterpret_cast<T *>(currentNextFitBlock + 1);
-        }
-
-        currentNextFitBlock = nextBlock ? nextBlock : reinterpret_cast<MemoryBlock *>(memoryPool);
-    }
-    while (currentNextFitBlock != firstBlock);
-
-    return nullptr;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-T *FreeListAllocator<T, Mode>::allocateBestFit(size_t size)
-{
-    MemoryBlock *currentBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
-    MemoryBlock *bestBlock = nullptr;
-
-    while (currentBlock)
-    {
-        if (currentBlock->isFree && currentBlock->size >= size)
-        {
-            if (!bestBlock || currentBlock->size < bestBlock->size)
+            if (it->isEmpty())
             {
-                bestBlock = currentBlock;
+                it = freeLists.erase(it);
+                continue;
             }
         }
 
-        currentBlock = currentBlock->next;
-    }
-
-    if (bestBlock)
-    {
-        splitMemoryBlock(bestBlock, size);
-
-        bestBlock->isFree = false;
-
-        return reinterpret_cast<T *>(bestBlock + 1);
-    }
-
-    return nullptr;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-void FreeListAllocator<T, Mode>::splitMemoryBlock(MemoryBlock *leftBlock, size_t leftBlockSize)
-{
-    assert(isValidBlock(leftBlock));
-    assert(leftBlockSize > 0);
-
-    size_t requiredLeftBlockSize = leftBlockSize;
-    if constexpr (Mode.alignByMemoryBlocks == FLA_ALIGN_BY_MEMORY_BLOCKS)
-    {
-        constexpr size_t memoryBlockAlignment = alignof(MemoryBlock);
-        const size_t alignmentRemainder = requiredLeftBlockSize % memoryBlockAlignment;
-        if (alignmentRemainder)
-        {
-            requiredLeftBlockSize += memoryBlockAlignment - alignmentRemainder;
-        }
-    }
-
-    if (leftBlock->size < requiredLeftBlockSize + sizeof(MemoryBlock) + 1) return;
-
-    MemoryBlock *const rightBlock = reinterpret_cast<MemoryBlock *>(reinterpret_cast<char *>(leftBlock) + sizeof(MemoryBlock) + requiredLeftBlockSize);
-    rightBlock->size = leftBlock->size - requiredLeftBlockSize - sizeof(MemoryBlock);
-    rightBlock->isFree = true;
-    rightBlock->next = leftBlock->next;
-    if constexpr (Mode.doubleMemoryBlocks == FLA_DOUBLE_MEMORY_BLOCKS)
-    {
-        rightBlock->previous = leftBlock;
-    }
-
-    leftBlock->size = requiredLeftBlockSize;
-    leftBlock->next = rightBlock;
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-void FreeListAllocator<T, Mode>::mergeSingleMemoryBlocks(MemoryBlock *leftBlock)
-{
-    assert(isValidBlock(leftBlock));
-
-    MemoryBlock *const rightBlock = leftBlock->next;
-
-    if (!rightBlock) return;
-
-    if (!leftBlock->isFree || !rightBlock->isFree)
-    {
-        mergeSingleMemoryBlocks(rightBlock);
-        return;
-    }
-
-    leftBlock->size += sizeof(MemoryBlock) + rightBlock->size;
-    leftBlock->next = rightBlock->next;
-
-    mergeSingleMemoryBlocks(leftBlock);
-}
-
-template<typename T, FreeListAllocatorMode Mode>
-void FreeListAllocator<T, Mode>::mergeDoubleMemoryBlocks(MemoryBlock *block)
-{
-    assert(isValidBlock(block));
-    assert(block->isFree);
-
-    MemoryBlock *const leftBlock = block->previous;
-    MemoryBlock *const rightBlock = block->next;
-
-    if (leftBlock && leftBlock->isFree)
-    {
-        leftBlock->size += sizeof(MemoryBlock) + block->size;
-        leftBlock->next = block->next;
-
-        if (rightBlock)
-        {
-            rightBlock->previous = leftBlock;
-        }
-
-        block = leftBlock;
-    }
-
-    if (rightBlock && rightBlock->isFree)
-    {
-        block->size += sizeof(MemoryBlock) + rightBlock->size;
-        block->next = rightBlock->next;
-
-        if (rightBlock->next)
-        {
-            rightBlock->next->previous = block;
-        }
+        ++it;
     }
 }
 
-template<typename T, FreeListAllocatorMode Mode>
-bool FreeListAllocator<T, Mode>::isValidBlock(const MemoryBlock *block) const
+template<typename T, FreeListMode FreeListMode, FreeListAllocatorMode AllocatorMode>
+bool FreeListAllocator<T, FreeListMode, AllocatorMode>::isValid(const T *ptr)
 {
-    if (!block) return false;
-
-    const MemoryBlock *currentBlock = reinterpret_cast<MemoryBlock *>(memoryPool);
-
-    while (true)
+    for (const FreeList<T, FreeListMode> &freeList: freeLists)
     {
-        if (block == currentBlock) return true;
-
-        const MemoryBlock *const nextBlock = currentBlock->next;
-
-        if (!nextBlock) return false;
-
-        currentBlock = nextBlock;
+        if (freeList.isValid(ptr)) return true;
     }
 
     return false;
 }
 
-template<typename T, FreeListAllocatorMode Mode>
-bool FreeListAllocator<T, Mode>::isValidBlockFast(const MemoryBlock *block) const
+template<typename T, FreeListMode FreeListMode, FreeListAllocatorMode AllocatorMode>
+bool FreeListAllocator<T, FreeListMode, AllocatorMode>::isValidFast(const T *ptr)
 {
-    return reinterpret_cast<unsigned long int>(block) >= reinterpret_cast<unsigned long int>(memoryPool) &&
-           reinterpret_cast<unsigned long int>(block) < reinterpret_cast<unsigned long int>(memoryPool) + reinterpret_cast<unsigned long int>(memoryPoolSize);
+    for (const FreeList<T, FreeListMode> &freeList: freeLists)
+    {
+        if (freeList.isValidFast(ptr)) return true;
+    }
+
+    return false;
 }
